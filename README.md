@@ -34,7 +34,7 @@ To use this program, you only need to have [Docker](https://www.docker.com/) ins
   ```
 
 3. **Access the Web App**  
-  Once everything is up and running, open your browser and go to [localhost](http://localhost:8080) to use the application.
+  Once everything is up and running, open your browser and go to [localhost:8080](http://localhost:8080) to use the application.
 
   ---
 
