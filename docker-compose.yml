@@ -1,13 +1,27 @@
 services:
-  my_app:
+  backend:
     build: 
-      context: .
-    image: chatbot:latest
-    container_name: chatbot
+      context: ./backend
+      dockerfile: Dockerfile.backend
+    image: chatbot-backend:latest
+    container_name: chatbot-backend
+    ports:
+      - "8000:8000"
     environment:
       - OLLAMA_BASE_URL=http://ollama:11434
     depends_on:
       - ollama
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.frontend
+    image: chatbot-frontend:latest
+    container_name: chatbot-frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
 
   ollama:
     image: ollama/ollama
