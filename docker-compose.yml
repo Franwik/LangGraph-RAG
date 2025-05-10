@@ -4,10 +4,6 @@ services:
       context: .
     image: chatbot:latest
     container_name: chatbot
-    stdin_open: true
-    tty: true
-    ports:
-      - "3000:3000"
     environment:
       - OLLAMA_BASE_URL=http://ollama:11434
     depends_on:
@@ -16,8 +12,6 @@ services:
   ollama:
     image: ollama/ollama
     container_name: ollama
-    ports:
-      - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
     entrypoint: >
