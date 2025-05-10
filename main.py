@@ -1,80 +1,51 @@
-from langchain_ollama import OllamaLLM
-from langchain_core.prompts import ChatPromptTemplate
-from neo4j import GraphDatabase
+import os
+from typing import Annotated
 
-# Connessione al database Neo4j
-NEO4J_URI = "neo4j+s://3299886a.databases.neo4j.io"
-NEO4J_USER = "neo4j"
-NEO4J_PASSWORD = "4VGjh_3hF4BzjvuUlYTN9A3v8Lw15fSuL4avnzBPF7E"
+# from langchain.chat_models import init_chat_model
+from langchain_ollama import ChatOllama
+from typing_extensions import TypedDict
 
-driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+from langgraph.graph import StateGraph
+from langgraph.graph.message import add_messages
 
-def run_neo4j_query():
-    query = """
-    MATCH (p:Person {name:'Tom Hanks'})-[r]-(m:Movie) RETURN p,r,m
-    """
-    # print("Executing Neo4j query...")
-    with driver.session() as session:
-        result = session.run(query)
-        context = ""
-        for record in result:
-            
-            p = record["p"]
-            r = record["r"]
-            m = record["m"]
 
-            # Estrai label
-            p_label = list(p.labels)[0] if p.labels else "Node"
-            m_label = list(m.labels)[0] if m.labels else "Node"
-            r_type = r.type
+class State(TypedDict):
+    messages: Annotated[list, add_messages]
 
-            # Estrai proprietà
-            p_props = dict(p)
-            m_props = dict(m)
-            r_props = dict(r)
 
-            context += f"(:{p_label} {p_props})-[:{r_type} {r_props}]->(:{m_label} {m_props})\n"
-    # print(context)
-    # print("Neo4j query executed successfully.")
-    return context
+graph_builder = StateGraph(State)
 
-template = """
-Answer the question below based on the database.
-If the user doesn't mention anything about the database, please answer based on your own knowledge.
-If the user asks about the database, please answer based on the database context.
-Keep the answer simple, short and concise and use the same language the question is in.
 
-Here is the conversation history: {history}
+llm = ChatOllama(
+    model="llama3.2",
+    base_url=os.getenv("OLLAMA_BASE_URL")
+)
 
-Here is the database context: {context}
+def chatbot(state: State):
+    return {"messages": [llm.invoke(state["messages"])]}
 
-Question: {question}
 
-Answer:
-"""
+# The first argument is the unique node name
+# The second argument is the function or object that will be called whenever
+# the node is used.
+graph_builder.add_node("chatbot", chatbot)
+graph_builder.set_entry_point("chatbot")
+graph_builder.set_finish_point("chatbot")
+graph = graph_builder.compile()
 
-model = OllamaLLM(model="llama3")
-promt = ChatPromptTemplate.from_template(template)
-chain = promt | model
+def stream_graph_updates(user_input: str):
+    for event in graph.stream({"messages": [{"role": "user", "content": user_input}]}):
+        for value in event.values():
+            print("\nAssistant:", value["messages"][-1].content,"\n")
 
-def handle_conversation():
-  history = ""
-  print("--- Welcome to the AI ChatBot, type '\\q' to quit ---\n")
-  while True:
-    user_input = input("You: ")
+while True:
+    try:
+        user_input = input("User: ")
+        if user_input.lower() in ["quit", "exit", "q"]:
+            print("Goodbye!")
+            break
+        stream_graph_updates(user_input)
 
-    if user_input.lower() == '\\q':
+    except Exception as e:
+        print(f"Exception occurred: {e}")
         break
-    elif user_input.startswith('\\'):
-        print("No such command...")
-    else:
-        context = run_neo4j_query()
-        
-        # print("\n--- AI is thinking... ---\n")
-        result = chain.invoke({"history": history, "context":context, "question": user_input})
-        print("\nAI: ", result, "\n")
-        history += f"You: {user_input}\nAI: {result}\n"
-        # print("--- Conversation history updated ---\n")
-
-if __name__ == "__main__":
-    handle_conversation()
