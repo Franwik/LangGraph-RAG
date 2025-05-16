@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
-from graph_logic import graph
+from graph_logic import graph_builder
 
 router = APIRouter()
 
@@ -10,11 +10,17 @@ class ChatRequest(BaseModel):
 @router.post("/chat")
 async def chat(req: ChatRequest):
     user_input = req.message
-    output = ""
-    try:
-        for event in graph.stream({"messages": [{"role": "user", "content": user_input}]}):
-            for value in event.values():
-                output = value["messages"][-1].content
-    except Exception as e:
-        output = f"Error: {str(e)}"
-    return {"response": output}
+    print(f"User input: {user_input} \n\n")
+    graph = graph_builder.compile()
+
+    state_input = {
+        "messages": [{"role": "user", "content": user_input}],
+        "cypher_query": "",
+        "neo4j_result": []
+    }
+
+    result = graph.invoke(state_input)
+
+    return {
+        "response": result["messages"][-1].content
+    }

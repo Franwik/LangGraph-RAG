@@ -1,4 +1,12 @@
-from langchain_community.graphs import Neo4jGraph
+from langchain_neo4j import Neo4jGraph
+from config import NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
 
-# Refresh schema is false to avoid unnecessary load
-graph = Neo4jGraph(refresh_schema=False)
+graph = Neo4jGraph(
+    url=NEO4J_URI,
+    username=NEO4J_USER,
+    password=NEO4J_PASSWORD,
+    refresh_schema=True,
+)
+
+def init_connection():
+    return graph

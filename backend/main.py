@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api import router as chat_router
+from graph_logic import graph_builder
 
 app = FastAPI()
 

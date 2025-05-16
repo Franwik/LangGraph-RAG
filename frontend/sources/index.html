@@ -68,9 +68,18 @@
       e.preventDefault();
       const input = document.getElementById('chatInput');
       const message = input.value.trim();
+
+      let chatState = {
+        messages: [],
+        cypher_query: "",
+        query_result: null
+      };
+
       if (message !== '') {
         appendMessage('🗣️: ' + message);
         input.value = '';
+
+        chatState.messages.push({ role: "user", content: message });
 
         try {
           const response = await fetch('http://localhost:8000/chat', {
