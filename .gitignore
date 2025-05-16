@@ -132,6 +132,7 @@ celerybeat.pid
 .venv
 env/
 venv/
+neo4jquery/venv/
 ENV/
 env.bak/
 venv.bak/
@@ -172,6 +173,3 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
-
-# Ignore venv folder
-venv/
