@@ -10,3 +10,4 @@ typing_extensions==4.13.2
 sentence_transformers==4.1.0
 uvicorn
 neo4j
+openai
