@@ -12,7 +12,7 @@ REMOTE_NEO4J_DATABASE = "neo4j"
 REMOTE_NEO4J_USER = "neo4j"
 REMOTE_NEO4J_PASSWORD = "Vp7D00JQZiERq4s1DnO4HFFwSxSPxZb9S9tZ4ruoaC4"
 
-LOCAL_NEO4J_URI = "bolt://localhost:7689"
+LOCAL_NEO4J_URI = "bolt://localhost:7687"
 LOCAL_NEO4J_DATABASE = "neo4j"
 LOCAL_NEO4J_USER = "neo4j"
 LOCAL_NEO4J_PASSWORD = "Vp7D00JQZiERq4s1DnO4HFFwSxSPxZb9S9tZ4ruoaC4"
@@ -21,7 +21,7 @@ LOCAL_NEO4J_PASSWORD = "Vp7D00JQZiERq4s1DnO4HFFwSxSPxZb9S9tZ4ruoaC4"
 model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
 # Frase da cercare
-description = "This program is designed to answer questions about epilepsy, including symptoms, treatment options, seizure types, first aid, and lifestyle tips. It provides clear, reliable, and easy-to-understand information based on trusted medical sources, helping users learn more about managing and understanding epilepsy."
+description = "I want to see an action movie"
 embedding = model.encode(description, normalize_embeddings=True).tolist()
 
 # Crea la connessione
@@ -45,21 +45,15 @@ local_graph = Neo4jGraph(
 def find_similar_items(embedding):
 
     # Query ANN + risalita al nodo collegato
-    # retrieve_query = """
-    # CALL db.index.vector.queryNodes("abstractEmbedding", 100, $embedding) YIELD node, score
-    # MATCH (item)-[:HAS_EMBEDDING]->(node)
-    # RETURN item, score
-    # ORDER BY score DESC
-    # """
-
     retrieve_query = """
-    MATCH (item:Person {name:'Tom Hanks'})
+    CALL db.index.vector.queryNodes("abstractEmbedding", 10, $embedding) YIELD node, score
+    MATCH (item)-[:HAS_EMBEDDING]->(node)
     RETURN item, labels(item) AS item_labels
+    ORDER BY score DESC
     """
 
     result = remote_graph.query(retrieve_query, {"embedding": embedding})
     return [(record["item"], record["item_labels"]) for record in result]
-    # return [(record["item"], record["score"]) for record in result]
 
 def create_shard(embedding):
     # Recupera nodi simili dal remoto
@@ -67,100 +61,48 @@ def create_shard(embedding):
 
     for item, item_labels in results:
 
+        item_props = dict(item)
+        item_id = item_props.pop("id", None)
+
         # Costruisci dinamicamente la query di creazione
         create_node_query = f"""
-        CREATE (n:{':'.join(item_labels)})
+        MERGE (n:{':'.join(item_labels)} {{id: $id}})
         SET n += $props
-        RETURN id(n) as local_id
         """
 
         # Crea il nodo nel grafo locale
-        local_result = local_graph.query(create_node_query, {"props": item})
-        local_id = local_result[0]["local_id"]
-        print(local_id)
+        local_graph.query(create_node_query, {"props": item_props, "id": item_id})
 
         # Copia i nodi connessi e relazioni
         related_query = """
-        MATCH (i)-[r]->(related)
-        WHERE id(i) = $remote_id
+        MATCH (i {{id: $item_id}})-[r]->(related)
         RETURN type(r) AS rel_type, properties(r) AS rel_props, labels(related) AS related_labels, properties(related) AS related_props
         """
 
-        remote_id = item.metadata["id"] # da usare pmcid
-        relations = remote_graph.query(related_query, {"remote_id": remote_id})
+        relations = remote_graph.query(related_query, {"item_id": item_id})
 
-        for rel in relations:
+        for rel_type, rel_props, related_labels, related_props in relations:
+
+            related_props = dict(related_props)
+            related_id = related_props.pop("id", None)
+
             # Crea nodo collegato
             create_related_node = f"""
-            CREATE (m:{':'.join(rel["related_labels"])})
-            SET m += $props
-            RETURN id(m) as related_id
+            MERGE (n:{':'.join(related_labels)} {{id: $id}})
+            SET n += $props
             """
-            related_result = local_graph.query(create_related_node, {"props": rel["related_props"]})
-            related_id = related_result[0]["related_id"]
+            local_graph.query(create_related_node, {"props": related_props, "id": related_id})
 
             # Crea la relazione tra `n` e `m`
             create_rel_query = f"""
-            MATCH (n), (m)
-            WHERE id(n) = $n_id AND id(m) = $m_id
-            CREATE (n)-[r:{rel['rel_type']}]->(m)
+            MATCH (n {{id: $n_id}}), (m {{id: $m_id}})
+            MERGE (n)-[r:{':'.join(rel_type)}]->(m)
             SET r += $props
             """
             local_graph.query(create_rel_query, {
-                "n_id": local_id,
+                "n_id": item_id,
                 "m_id": related_id,
-                "props": rel["rel_props"]
+                "props": rel_props
             })
-        
-
-    # for item, score in results:
-    #     # Estrai proprietà del nodo principale
-    #     item_props = dict(item)
-    #     item_labels = list(item.labels)
-
-    #     # Costruisci dinamicamente la query di creazione
-    #     create_node_query = f"""
-    #     CREATE (n:{':'.join(item_labels)})
-    #     SET n += $props
-    #     RETURN id(n) as local_id
-    #     """
-
-    #     # Crea il nodo nel grafo locale
-    #     local_result = local_graph.query(create_node_query, {"props": item_props})
-    #     local_id = local_result[0]["local_id"]
-
-    #     # Copia i nodi connessi e relazioni
-    #     related_query = """
-    #     MATCH (i)-[r]->(related)
-    #     WHERE id(i) = $remote_id
-    #     RETURN type(r) AS rel_type, properties(r) AS rel_props, labels(related) AS related_labels, properties(related) AS related_props
-    #     """
-
-    #     remote_id = item.metadata["id"]
-    #     relations = remote_graph.query(related_query, {"remote_id": remote_id})
-
-    #     for rel in relations:
-    #         # Crea nodo collegato
-    #         create_related_node = f"""
-    #         CREATE (m:{':'.join(rel["related_labels"])})
-    #         SET m += $props
-    #         RETURN id(m) as related_id
-    #         """
-    #         related_result = local_graph.query(create_related_node, {"props": rel["related_props"]})
-    #         related_id = related_result[0]["related_id"]
-
-    #         # Crea la relazione tra `n` e `m`
-    #         create_rel_query = f"""
-    #         MATCH (n), (m)
-    #         WHERE id(n) = $n_id AND id(m) = $m_id
-    #         CREATE (n)-[r:{rel['rel_type']}]->(m)
-    #         SET r += $props
-    #         """
-    #         local_graph.query(create_rel_query, {
-    #             "n_id": local_id,
-    #             "m_id": related_id,
-    #             "props": rel["rel_props"]
-    #         })
-
 
 create_shard(embedding)

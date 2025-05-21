@@ -43,6 +43,8 @@ def run_query(state: State):
 
     query = clean_cypher_query(query)
 
+    print(f"Executing query: {query}")
+
     results = conn.query(query)
 
     return {"neo4j_result": results}
