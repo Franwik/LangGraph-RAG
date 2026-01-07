@@ -48,111 +48,109 @@ def find_similar_items(embedding):
     retrieve_query = """
     CALL db.index.vector.queryNodes("abstractEmbedding", 10, $embedding) YIELD node, score
     MATCH (item)-[:HAS_EMBEDDING]->(node)
-    RETURN item, labels(item) AS item_labels
     ORDER BY score DESC
+    RETURN item
     """
 
     result = remote_graph.query(retrieve_query, {"embedding": embedding})
-    return [(record["item"], record["item_labels"]) for record in result]
+    return [(record["item"]) for record in result]
+
+
+def get_subgraphs(item_id):
+
+    print("Retrieving subgraphs")
+
+    query = """
+    MATCH (root {id: $item_id})
+    CALL apoc.path.subgraphAll(root, {maxLevel: 1}) YIELD nodes, relationships
+    RETURN nodes, relationships
+    """
+
+    result = remote_graph.query(query, {"item_id": item_id})
+    return result[0] if result else {"nodes": [], "relationships": []}
+
+
+# def import_subgraphs(subgraph_record):
+#     print("Importing subgraphs into local graph")
+    
+#     nodes = subgraph_record["nodes"]
+#     relationships = subgraph_record["relationships"]
+
+#     # query = """
+#     # CALL apoc.refactor.cloneSubgraph($nodes, [rel in $relationships])
+#     # YIELD input, output, error
+#     # RETURN input, output, error
+#     # """
+
+#     query = """
+    
+#     """
+
+#     local_graph.query(query, {
+#         "nodes": nodes,
+#         "relationships": relationships
+#     })
+
+
+def import_subgraphs(subgraph_record):
+    print("Importing subgraphs into local graph")
+
+    nodes = subgraph_record["nodes"]
+    relationships = subgraph_record["relationships"]
+
+    # Importa i nodi con MERGE su tutte le proprietà
+    for node in nodes:
+        labels = ":".join(node.labels)
+        props = dict(node)
+
+        # Costruisci MATCH condition per ogni proprietà
+        merge_parts = ", ".join([f"{k}: ${k}" for k in props])
+        set_props = ", ".join([f"n.{k} = ${k}" for k in props])
+
+        query = f"""
+        MERGE (n:{labels} {{ {merge_parts} }})
+        SET {set_props}
+        """
+        local_graph.query(query, props)
+
+    # Importa le relazioni
+    for rel in relationships:
+        start_node = dict(rel.start_node)
+        end_node = dict(rel.end_node)
+        rel_props = dict(rel)
+        rel_type = rel.type
+
+        # MATCH conditions per start e end nodes
+        start_match = " AND ".join([f"a.{k} = $start_{k}" for k in start_node])
+        end_match = " AND ".join([f"b.{k} = $end_{k}" for k in end_node])
+        rel_set = ", ".join([f"r.{k} = $rel_{k}" for k in rel_props])
+
+        query = f"""
+        MATCH (a), (b)
+        WHERE {start_match} AND {end_match}
+        MERGE (a)-[r:{rel_type}]->(b)
+        SET {rel_set}
+        """
+
+        # Prefissa le chiavi per evitare conflitti nei parametri
+        params = {f"start_{k}": v for k, v in start_node.items()}
+        params.update({f"end_{k}": v for k, v in end_node.items()})
+        params.update({f"rel_{k}": v for k, v in rel_props.items()})
+
+        local_graph.query(query, params)
+
 
 def create_shard(embedding):
-    # Recupera nodi simili dal remoto
-    results = find_similar_items(embedding)
+    similar_items = find_similar_items(embedding)
 
-    for item, item_labels in results:
+    for item in similar_items:
+        item_id = item.get("id")
+        if not item_id:
+            continue
+        subgraph = get_subgraphs(item_id)
+        # print(subgraph)
+        # break
+        import_subgraphs(subgraph)
 
-        item_props = item
-        item_id = item_props.pop("id", None)
-
-        # Costruisci dinamicamente la query di creazione
-        create_node_query = f"""
-        MERGE (n:{':'.join(item_labels)} {{id: $id}})
-        SET n += $props
-        """
-
-        # Crea il nodo nel grafo locale
-        local_graph.query(create_node_query, {"props": item_props, "id": item_id})
-
-        # Copia i nodi connessi e relazioni
-        related_query_outgoing = """
-        MATCH (i {id: $item_id})-[r]->(related)
-        RETURN type(r) AS rel_type, properties(r) AS rel_props, labels(related) AS related_labels, properties(related) AS related_props
-        """
-
-        outgoing_relations = remote_graph.query(related_query_outgoing, {"item_id": item_id})
-
-        for rel in outgoing_relations:
-
-            rel_type = rel["rel_type"]
-            rel_props = rel["rel_props"]
-            related_labels = rel["related_labels"]
-            related_props = dict(rel["related_props"])
-            related_id = related_props.pop("id", None)
-
-            # Crea nodo collegato
-            create_related_node = f"""
-            MERGE (n:{':'.join(related_labels)} {{id: $id}})
-            SET n += $props
-            """
-
-            create_embedding_node = f"""
-            MATCH (n {{id: $id}})
-            MERGE (m:{':'.join(related_labels)} {{value: $embedding}})
-            MERGE (n)-[:HAS_EMBEDDING]->(m)
-            """
-
-            if related_id is None:
-                internal_embedding = related_props.pop("value", None)
-                local_graph.query(create_embedding_node, {"props": related_props, "id": item_id, "embedding": internal_embedding})
-            else:
-                local_graph.query(create_related_node, {"props": related_props, "id": related_id})
-
-                # Crea la relazione tra `n` e `m`
-                create_rel_query = f"""
-                MATCH (n {{id: $n_id}}), (m {{id: $m_id}})
-                MERGE (n)-[r:{rel_type}]->(m)
-                SET r += $props
-                """
-                local_graph.query(create_rel_query, {
-                    "n_id": item_id,
-                    "m_id": related_id,
-                    "props": rel_props
-                })
-
-
-        related_query_ingoing = """
-        MATCH (i {id: $item_id})<-[r]-(related)
-        RETURN type(r) AS rel_type, properties(r) AS rel_props, labels(related) AS related_labels, properties(related) AS related_props
-        """
-
-        ingoing_relations = remote_graph.query(related_query_ingoing, {"item_id": item_id})
-
-        for rel in ingoing_relations:
-
-            rel_type = rel["rel_type"]
-            rel_props = rel["rel_props"]
-            related_labels = rel["related_labels"]
-            related_props = dict(rel["related_props"])
-            related_id = related_props.pop("id", None)
-
-            # Crea nodo collegato
-            create_related_node = f"""
-            MERGE (n:{':'.join(related_labels)} {{id: $id}})
-            SET n += $props
-            """
-
-            local_graph.query(create_related_node, {"props": related_props, "id": related_id})
-
-            # Crea la relazione tra `n` e `m`
-            create_rel_query = f"""
-            MATCH (n {{id: $n_id}}), (m {{id: $m_id}})
-            MERGE (n)<-[r:{rel_type}]-(m)
-            SET r += $props
-            """
-            local_graph.query(create_rel_query, {
-                "n_id": item_id,
-                "m_id": related_id,
-                "props": rel_props
-            })
 
 create_shard(embedding)
